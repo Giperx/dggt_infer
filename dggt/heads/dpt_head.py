@@ -222,7 +222,8 @@ class DPTHead(nn.Module):
             if frames_start_idx is not None and frames_end_idx is not None:
                 x = x[:, frames_start_idx:frames_end_idx]
 
-            x = x.view(B * S, -1, x.shape[-1])
+            # Use reshape to support non-contiguous tensors after slicing/chunking.
+            x = x.reshape(B * S, -1, x.shape[-1])
 
             x = self.norm(x)
 
@@ -250,13 +251,13 @@ class DPTHead(nn.Module):
             out = self._apply_pos_embed(out, W, H)
 
         if self.feature_only:
-            return out.view(B, S, *out.shape[1:])
+            return out.reshape(B, S, *out.shape[1:])
 
         out = self.scratch.output_conv2(out)
         preds, conf = activate_head(out, activation=self.activation, conf_activation=self.conf_activation)
 
-        preds = preds.view(B, S, *preds.shape[1:])
-        conf = conf.view(B, S, *conf.shape[1:])
+        preds = preds.reshape(B, S, *preds.shape[1:])
+        conf = conf.reshape(B, S, *conf.shape[1:])
         return preds, conf
 
     def _apply_pos_embed(self, x: torch.Tensor, W: int, H: int, ratio: float = 0.1) -> torch.Tensor:

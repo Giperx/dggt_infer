@@ -154,10 +154,10 @@ def gs_activate_head(out, sh_degree=None, tau = 0.5):
         color_channel = ((sh_degree + 1)**2) * 3
         
     # Split into xyz (first C-1 channels) and confidence (last channel)
-    color = fmap[:, :, :, :color_channel]
-    opacity = fmap[:, :, :, color_channel:color_channel+1]
-    scale = fmap[:, :, :, color_channel+1:color_channel+4]
-    rotation = fmap[:, :, :, color_channel+4:color_channel+8]
+    color = fmap[:, :, :, :color_channel] # 3
+    opacity = fmap[:, :, :, color_channel:color_channel+1] # 1 
+    scale = fmap[:, :, :, color_channel+1:color_channel+4] # 3
+    rotation = fmap[:, :, :, color_channel+4:color_channel+8] # 4
     conf = fmap[:, :, :, -1]
     
     if sh_degree is None:

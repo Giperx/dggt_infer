@@ -9,7 +9,7 @@ from PIL import Image
 from torchvision import transforms as TF
 
 
-def load_and_preprocess_images(image_path_list, mode="crop"):
+def load_and_preprocess_images(image_path_list, mode="crop", target_size=518):
     """
     A quick start function to load and preprocess images for model input.
     This assumes the images should have the same shape for easier batching, but our model can also work well with different shapes.
@@ -47,7 +47,7 @@ def load_and_preprocess_images(image_path_list, mode="crop"):
     images = []
     shapes = set()
     to_tensor = TF.ToTensor()
-    target_size = 518
+    target_size = target_size
 
     # First process all images and collect their shapes
     for image_path in image_path_list:
