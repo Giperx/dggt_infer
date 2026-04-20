@@ -192,3 +192,7 @@ render*/
 split*/
 model*.pt
 .vscode
+
+tmp*.*
+tmp*/
+logs/
