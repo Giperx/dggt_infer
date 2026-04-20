@@ -142,6 +142,7 @@ class NuScenesTemporalMultiCamDataset(Dataset):
         target_size: int = 518,
         max_interval: int = 5,
         is_val: bool = False,
+        multiframe_forward_order: bool = False,
     ):
         if sequence_length != 3:
             raise ValueError("This dataset is designed for exactly 3 frames per sample.")
@@ -155,6 +156,7 @@ class NuScenesTemporalMultiCamDataset(Dataset):
         self.sequence_length = sequence_length
         self.num_cameras_per_frame = num_cameras_per_frame
         self.is_val = is_val
+        self.multiframe_forward_order = multiframe_forward_order
 
         self.scene_entries = []
         self.train_sequence_index = []
@@ -304,8 +306,12 @@ class NuScenesTemporalMultiCamDataset(Dataset):
             start_timestep, middle_timestep, end_timestep, interval = self._sample_temporal_window(valid_timesteps)
         else:
             start_timestep, middle_timestep, end_timestep, interval = self._sample_temporal_window_train(valid_timesteps, anchor_timestep)
-        # Model input order is newest -> oldest.
-        frame_timesteps = [end_timestep, middle_timestep, start_timestep]
+        if self.multiframe_forward_order:
+            # old -> new
+            frame_timesteps = [start_timestep, middle_timestep, end_timestep]
+        else:
+            # new -> old
+            frame_timesteps = [end_timestep, middle_timestep, start_timestep]
         cam_ids = CAMERA_GROUPS[group_name]
 
         image_paths = []
@@ -315,7 +321,6 @@ class NuScenesTemporalMultiCamDataset(Dataset):
         timestamps = []
         frame_ego_to_world = []
 
-        max_time = 2 * interval
         for frame_offset, timestep in enumerate(frame_timesteps):
             frame_ego_to_world.append(_load_pose_matrix(ego_pose_map[timestep]))
             for cam_id in cam_ids:
@@ -323,7 +328,12 @@ class NuScenesTemporalMultiCamDataset(Dataset):
                 mask_paths.append(mask_map[timestep][cam_id])
                 view_frame_ids.append(timestep)
                 view_camera_ids.append(cam_id)
-            timestamps.append(max_time - frame_offset * interval)
+
+            if self.multiframe_forward_order:
+                timestamps.append(frame_offset * interval)
+            else:
+                max_time = 2 * interval
+                timestamps.append(max_time - frame_offset * interval)
 
         # Normalize using the newest frame as Ego0, and output EgoN->Ego0 transforms.
         ego0_world_to_ego = np.linalg.inv(frame_ego_to_world[0])

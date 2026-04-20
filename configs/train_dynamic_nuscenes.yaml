@@ -2,6 +2,8 @@ data:
   image_dir: data/datasets/nuscenes/processed_10Hz/trainval2
   train_scene_list: data/datasets/nuscenes/processed_10Hz/trainval2/nuScenes_Train.txt
   val_scene_list: data/datasets/nuscenes/processed_10Hz/trainval2/nuScenes_Val.txt
+  # true: old->new (0,1,2), false: new->old (2,1,0)
+  multiframe_forward_order: true
   sequence_length: 3
   num_cameras_per_frame: 3
   target_size: 448
@@ -15,7 +17,7 @@ model_init:
   aggregator_to_bfloat16: false
 
 train:
-  max_epoch: 5
+  max_epoch: 3
   # progress_steps_per_epoch: 68925
   batch_size: 2
   num_workers: 16
@@ -51,7 +53,7 @@ log:
   debug_vis_every: 10 # not used
   # Preferred global-step key:
   vis_flag: true
-  debug_vis_every_steps: 4000
+  debug_vis_every_steps: 5000
 
 # CUDA_VISIBLE_DEVICES=4 torchrun --standalone --nnodes=1 --nproc_per_node=1 train_dynamic.py --config configs/train_dynamic_nuscenes.yaml
 

@@ -175,6 +175,7 @@ def main(args):
         max_interval=int(cfg.data.max_interval),
         target_size=int(cfg.data.target_size),
         is_val=False,
+        multiframe_forward_order=bool(cfg.data.get('multiframe_forward_order', False)),
     )
     sampler = DistributedSampler(dataset, shuffle=True)
     dataloader = DataLoader(
@@ -193,6 +194,7 @@ def main(args):
         max_interval=int(cfg.data.max_interval),
         target_size=int(cfg.data.target_size),
         is_val=True,
+        multiframe_forward_order=bool(cfg.data.get('multiframe_forward_order', False)),
     )
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
     val_dataloader = DataLoader(
