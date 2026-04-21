@@ -419,6 +419,7 @@ def main(args):
         log_fn(f"progress_steps_per_epoch={progress_steps_per_epoch}, progress_total_steps={progress_total_steps}")
 
     val_every_steps = int(cfg.train.get('val_every_steps', int(cfg.train.val_every) * max(steps_per_epoch, 1)))
+    train_log_every_steps = int(cfg.train.get('train_log_every_steps', 0))
     save_ckpt_every_steps = int(
         cfg.train.get('save_ckpt_every_steps', int(cfg.train.save_ckpt_every) * max(steps_per_epoch, 1))
     )
@@ -426,7 +427,7 @@ def main(args):
     debug_cal_every_steps = int(cfg.log.get('debug_cal_every_steps', 0))
     if local_rank == 0:
         log_fn(
-            f"val_every_steps={val_every_steps}, save_ckpt_every_steps={save_ckpt_every_steps}, "
+            f"train_log_every_steps={train_log_every_steps}, val_every_steps={val_every_steps}, save_ckpt_every_steps={save_ckpt_every_steps}, "
             f"cal_flag={cal_flag}, debug_cal_every_steps={debug_cal_every_steps}"
         )
 
@@ -460,6 +461,34 @@ def main(args):
     global_step = 0
     last_ckpt_global_step = -1
     pbar = tqdm(total=progress_total_steps, dynamic_ncols=True, desc='train_steps') if local_rank == 0 else None
+
+    def _reduce_and_log_train_metrics(cur_global_step: int, cur_epoch_idx: int, train_loss_sum, train_loss_T_sum, train_loss_R_sum, train_count):
+        dist.all_reduce(train_loss_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(train_loss_T_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(train_loss_R_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(train_count, op=dist.ReduceOp.SUM)
+
+        avg_train_loss = (train_loss_sum / torch.clamp(train_count, min=1.0)).item()
+        avg_train_loss_T = (train_loss_T_sum / torch.clamp(train_count, min=1.0)).item()
+        avg_train_loss_R = (train_loss_R_sum / torch.clamp(train_count, min=1.0)).item()
+
+        if local_rank == 0:
+            lr_now = float(scheduler.get_last_lr()[0])
+            log_fn(
+                f"[epoch={cur_epoch_idx}/{max_epoch}] [step={cur_global_step}/{max_steps}] "
+                f"Train Loss: {avg_train_loss:.4f} (T={avg_train_loss_T:.4f}, R={avg_train_loss_R:.4f}) | LR: {lr_now:.6e}"
+            )
+            if writer is not None:
+                writer.add_scalar('loss/train', avg_train_loss, cur_global_step)
+                writer.add_scalar('loss/train_T', avg_train_loss_T, cur_global_step)
+                writer.add_scalar('loss/train_R', avg_train_loss_R, cur_global_step)
+                writer.add_scalar('lr', lr_now, cur_global_step)
+
+    def _zero_train_stats(train_loss_sum, train_loss_T_sum, train_loss_R_sum, train_count):
+        train_loss_sum.zero_()
+        train_loss_T_sum.zero_()
+        train_loss_R_sum.zero_()
+        train_count.zero_()
 
     def run_validation(cur_global_step: int, cur_epoch_idx: int):
         model.eval()
@@ -538,6 +567,10 @@ def main(args):
         train_loss_T_sum_local = torch.zeros(1, device=device)
         train_loss_R_sum_local = torch.zeros(1, device=device)
         train_count_local = torch.zeros(1, device=device)
+        train_interval_loss_sum_local = torch.zeros(1, device=device)
+        train_interval_loss_T_sum_local = torch.zeros(1, device=device)
+        train_interval_loss_R_sum_local = torch.zeros(1, device=device)
+        train_interval_count_local = torch.zeros(1, device=device)
 
         for batch in dataloader:
             images = batch['images'].to(device)
@@ -558,9 +591,30 @@ def main(args):
             train_loss_T_sum_local += loss_dict['loss_absolute_ego_pose_T'].detach()
             train_loss_R_sum_local += loss_dict['loss_absolute_ego_pose_R'].detach()
             train_count_local += 1
+            train_interval_loss_sum_local += loss.detach()
+            train_interval_loss_T_sum_local += loss_dict['loss_absolute_ego_pose_T'].detach()
+            train_interval_loss_R_sum_local += loss_dict['loss_absolute_ego_pose_R'].detach()
+            train_interval_count_local += 1
 
             if pbar is not None and pbar.n < progress_total_steps:
                 pbar.update(1)
+
+            should_log_train = train_log_every_steps > 0 and global_step % train_log_every_steps == 0
+            if should_log_train:
+                _reduce_and_log_train_metrics(
+                    global_step,
+                    epoch_idx,
+                    train_interval_loss_sum_local,
+                    train_interval_loss_T_sum_local,
+                    train_interval_loss_R_sum_local,
+                    train_interval_count_local,
+                )
+                _zero_train_stats(
+                    train_interval_loss_sum_local,
+                    train_interval_loss_T_sum_local,
+                    train_interval_loss_R_sum_local,
+                    train_interval_count_local,
+                )
 
             should_run_val = (val_every_steps > 0 and global_step % val_every_steps == 0)
             if should_run_val:
@@ -578,6 +632,22 @@ def main(args):
                 log_fn(f"[Checkpoint] Saved model at global_step {global_step} to {ckpt_path}")
                 last_ckpt_global_step = global_step
 
+        if train_interval_count_local.item() > 0:
+            _reduce_and_log_train_metrics(
+                global_step,
+                epoch_idx,
+                train_interval_loss_sum_local,
+                train_interval_loss_T_sum_local,
+                train_interval_loss_R_sum_local,
+                train_interval_count_local,
+            )
+            _zero_train_stats(
+                train_interval_loss_sum_local,
+                train_interval_loss_T_sum_local,
+                train_interval_loss_R_sum_local,
+                train_interval_count_local,
+            )
+
         dist.all_reduce(train_loss_sum_local, op=dist.ReduceOp.SUM)
         dist.all_reduce(train_loss_T_sum_local, op=dist.ReduceOp.SUM)
         dist.all_reduce(train_loss_R_sum_local, op=dist.ReduceOp.SUM)
@@ -592,11 +662,6 @@ def main(args):
                 f"[epoch={epoch_idx}/{max_epoch}] [step={global_step}/{max_steps}] "
                 f"Train Loss: {avg_train_loss:.4f} (T={avg_train_loss_T:.4f}, R={avg_train_loss_R:.4f}) | LR: {lr_now:.6e}"
             )
-            if writer is not None:
-                writer.add_scalar('loss/train', avg_train_loss, global_step)
-                writer.add_scalar('loss/train_T', avg_train_loss_T, global_step)
-                writer.add_scalar('loss/train_R', avg_train_loss_R, global_step)
-                writer.add_scalar('lr', lr_now, global_step)
 
     if local_rank == 0:
         final_ckpt = os.path.join(ckpt_dir, f'model_final_step_{global_step}.pt')

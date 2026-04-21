@@ -160,9 +160,10 @@ def main(args):
         OmegaConf.save(cfg, os.path.join(log_dir, 'config_resolved.yaml'))
         log_file = open(log_txt_path, 'a', encoding='utf-8')
 
-    def log_fn(msg: str):
+    def log_fn(msg: str, print_flag: bool = True):
         if local_rank == 0:
-            print(msg)
+            if print_flag:
+                print(msg)
             if log_file is not None:
                 log_file.write(msg + '\n')
                 log_file.flush()
@@ -382,7 +383,7 @@ def main(args):
 
         if local_rank == 0:
             lr_now = float(scheduler.get_last_lr()[0])
-            log_fn(f"[epoch={epoch_idx}/{max_epoch}] [step={global_step}/{max_steps}] Train Loss: {avg_train_loss:.4f} | LR: {lr_now:.6e}")
+            log_fn(f"[epoch={epoch_idx}/{max_epoch}] [step={global_step}/{max_steps}] Train Loss: {avg_train_loss:.4f} | LR: {lr_now:.6e}", print_flag=False)
             if writer is not None:
                 writer.add_scalar('loss/train', avg_train_loss, global_step)
                 writer.add_scalar('lr', lr_now, global_step)

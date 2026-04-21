@@ -28,7 +28,8 @@ train:
   save_ckpt_every: 100
 
   # Preferred global-step keys:
-  val_every_steps: 1500
+  train_log_every_steps: 50
+  val_every_steps: 1000
   save_ckpt_every_steps: 10000
   val_at_start: true
 
@@ -56,7 +57,7 @@ log:
   log_dir: logs/ego_pose_head_nuscenes
   tensorboard_subdir: tensorboard
   cal_flag: true
-  debug_cal_every_steps: 1500
+  debug_cal_every_steps: 1000
 # 单卡
 # CUDA_VISIBLE_DEVICES=3 torchrun --standalone --nnodes=1 --nproc_per_node=1 train_ego_pose_pred.py --config configs/train_ego_pose_pred_nuscenes.yaml
 
