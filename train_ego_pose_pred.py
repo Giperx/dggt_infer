@@ -430,7 +430,7 @@ def main(args):
             f"cal_flag={cal_flag}, debug_cal_every_steps={debug_cal_every_steps}"
         )
 
-    model = VGGT(useDynamicHead=False, useEgoPosePredHead=cfg.model_init.use_ego_pose_pred_head, useCameraHead=cfg.model_init.use_camera_head_for_ego_pose).to(device)
+    model = VGGT(useDynamicHead=False, useCameraHead=cfg.model_init.use_camera_head_for_ego_pose).to(device)
     load_init_weights(model, cfg, local_rank, log_fn)
 
     model.train()

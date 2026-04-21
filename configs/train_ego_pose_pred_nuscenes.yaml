@@ -15,8 +15,7 @@ model_init:
   aggregator_prefix: aggregator.
   ego_pose_head_prefix: camera_head. # camera_head. 
   aggregator_to_bfloat16: false
-  use_camera_head_for_ego_pose: false
-  use_ego_pose_pred_head: true
+  use_camera_head_for_ego_pose: true
 
 train:
   max_epoch: 3
