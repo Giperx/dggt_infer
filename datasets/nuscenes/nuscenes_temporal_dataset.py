@@ -356,7 +356,7 @@ class NuScenesTemporalMultiCamDataset(Dataset):
             "view_frame_ids": torch.tensor(view_frame_ids, dtype=torch.long),
             "view_camera_ids": torch.tensor(view_camera_ids, dtype=torch.long),
             "timestamps": torch.tensor(timestamps, dtype=torch.float32),
-            # "frame_ego_to_ego0": torch.tensor(np.stack(frame_ego_to_ego0), dtype=torch.float32),
+            "ego_n_to_ego_first": torch.tensor(np.stack(frame_ego_to_ego0), dtype=torch.float32),
             # "ego_to_ego0": torch.tensor(np.stack(view_ego_to_ego0), dtype=torch.float32),
             "interval": interval,
             # "image_paths": image_paths,

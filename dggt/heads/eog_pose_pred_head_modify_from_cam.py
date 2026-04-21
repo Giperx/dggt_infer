@@ -12,22 +12,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from dggt.layers import Mlp
-from dggt.layers.block import Block
-from dggt.heads.head_act import activate_pose
+from dggt.layers.block_egouse import Block
+from dggt.heads.head_act import activate_ego_pose
 
 
-class CameraHead(nn.Module):
+class EgoPosePredHead(nn.Module):
     """
-    CameraHead predicts camera parameters from token representations using iterative refinement.
+    EgoPosePredHead predicts ego pose parameters from token representations using iterative refinement.
 
-    It applies a series of transformer blocks (the "trunk") to dedicated camera tokens.
+    It applies a series of transformer blocks (the "trunk") to dedicated ego pose tokens.
     """
 
     def __init__(
         self,
         dim_in: int = 2048,
         trunk_depth: int = 4,
-        pose_encoding_type: str = "absT_quaR_FoV",
+        pose_encoding_type: str = "absT_quaR",
         num_heads: int = 16,
         mlp_ratio: int = 4,
         init_values: float = 0.01,
@@ -37,10 +37,10 @@ class CameraHead(nn.Module):
     ):
         super().__init__()
 
-        if pose_encoding_type == "absT_quaR_FoV":
-            self.target_dim = 9
+        if pose_encoding_type == "absT_quaR":
+            self.target_dim = 7
         else:
-            raise ValueError(f"Unsupported camera encoding type: {pose_encoding_type}")
+            raise ValueError(f"Unsupported ego pose encoding type: {pose_encoding_type}")
 
         self.trans_act = trans_act
         self.quat_act = quat_act
@@ -50,12 +50,7 @@ class CameraHead(nn.Module):
         # Build the trunk using a sequence of transformer blocks.
         self.trunk = nn.Sequential(
             *[
-                Block(
-                    dim=dim_in,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                    init_values=init_values,
-                )
+                Block(dim=dim_in, num_heads=num_heads, mlp_ratio=mlp_ratio, init_values=init_values)
                 for _ in range(trunk_depth)
             ]
         )
@@ -73,12 +68,7 @@ class CameraHead(nn.Module):
 
         # Adaptive layer normalization without affine parameters.
         self.adaln_norm = nn.LayerNorm(dim_in, elementwise_affine=False, eps=1e-6)
-        self.pose_branch = Mlp(
-            in_features=dim_in,
-            hidden_features=dim_in // 2,
-            out_features=self.target_dim,
-            drop=0,
-        )
+        self.pose_branch = Mlp(in_features=dim_in, hidden_features=dim_in // 2, out_features=self.target_dim, drop=0)
 
     def forward(self, aggregated_tokens_list: list, num_iterations: int = 4) -> list:
         """
@@ -94,17 +84,12 @@ class CameraHead(nn.Module):
         """
         # Use tokens from the last block for camera prediction.
         tokens = aggregated_tokens_list[-1]
-        # print("Camera Head debug token shape: ", tokens.shape) # debug token shape:  torch.Size([2, 9, 581, 2048])
-        B, TV, P, C = tokens.shape
-        # Extract the camera tokens
-        pose_tokens = tokens[:, :, 0]
-        # print("Camera Head debug pose token shape: ", pose_tokens.shape) # debug pose token shape:  torch.Size([2, 9, 2048])
-        V = 3
-        T = TV // V
-        pose_tokens = pose_tokens.view(B, T, V, C) # torch.Size([2, 3, 3, 2048])
-        # Pick dedicated ego token from token dimension P, then average over views.
-        pose_tokens = pose_tokens.mean(dim=2)  # (B, T, C)
-        
+        # in forward process tokens from (B, T*V, dim) to (B, T, V, dim)
+        tokens = tokens.view(tokens.size(0), -1, 3, tokens.size(-1))
+        # Use all view features and pool across V -> (B, T, dim).
+        # T is fixed to 3 in this project.
+        pose_tokens = tokens
+        pose_tokens = pose_tokens.mean(dim=2)  # Average over the views dimension to get (B, T, dim)
         pose_tokens = self.token_norm(pose_tokens)
 
         pred_pose_enc_list = self.trunk_fn(pose_tokens, num_iterations)
@@ -115,13 +100,13 @@ class CameraHead(nn.Module):
         Iteratively refine camera pose predictions.
 
         Args:
-            pose_tokens (torch.Tensor): Normalized camera tokens with shape [B, 1, C].
+            pose_tokens (torch.Tensor): Normalized camera tokens with shape [B, S, C].
             num_iterations (int): Number of refinement iterations.
 
         Returns:
             list: List of activated camera encodings from each iteration.
         """
-        B, S, C = pose_tokens.shape  # S is expected to be 1.
+        B, S, C = pose_tokens.shape
         pred_pose_enc = None
         pred_pose_enc_list = []
 
@@ -151,11 +136,8 @@ class CameraHead(nn.Module):
                 pred_pose_enc = pred_pose_enc + pred_pose_enc_delta
 
             # Apply final activation functions for translation, quaternion, and field-of-view.
-            activated_pose = activate_pose(
-                pred_pose_enc,
-                trans_act=self.trans_act,
-                quat_act=self.quat_act,
-                fl_act=self.fl_act,
+            activated_pose = activate_ego_pose(
+                pred_pose_enc, trans_act=self.trans_act, quat_act=self.quat_act
             )
             pred_pose_enc_list.append(activated_pose)
 

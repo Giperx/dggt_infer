@@ -35,6 +35,18 @@ def activate_pose(pred_pose_enc, trans_act="linear", quat_act="linear", fl_act="
     return pred_pose_enc
 
 
+def activate_ego_pose(pred_pose_enc, trans_act="linear", quat_act="linear"):
+    """Activate ego pose encoding with translation + quaternion outputs."""
+    T = pred_pose_enc[..., :3]
+    quat = pred_pose_enc[..., 3:7]
+
+    T = base_pose_act(T, trans_act)
+    quat = base_pose_act(quat, quat_act)
+
+    pred_pose_enc = torch.cat([T, quat], dim=-1)
+    return pred_pose_enc
+
+
 def base_pose_act(pose_enc, act_type="linear"):
     """
     Apply basic activation function to pose parameters.

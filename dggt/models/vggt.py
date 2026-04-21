@@ -10,6 +10,7 @@ from huggingface_hub import PyTorchModelHubMixin  # used for model hub
 
 from dggt.models.aggregator import Aggregator
 from dggt.heads.camera_head import CameraHead
+from dggt.heads.eog_pose_pred_head import EgoPosePredHead
 from dggt.heads.dpt_head import DPTHead, GaussianHead
 from dggt.heads.track_head import TrackHead
 from dggt.heads.gs_head import GaussianDecoder
@@ -19,11 +20,14 @@ from dggt.models.fusion import PointNetGSFusion
 
 
 class VGGT(nn.Module, PyTorchModelHubMixin):
-    def __init__(self, img_size=518, patch_size=14, embed_dim=1024, semantic_num = 10):
+    def __init__(self, img_size=518, patch_size=14, embed_dim=1024, semantic_num = 10, useDynamicHead = False, useEgoPosePredHead = False, useCameraHead = False):
         super().__init__()
 
         self.aggregator = Aggregator(img_size=img_size, patch_size=patch_size, embed_dim=embed_dim)
-        # self.camera_head = CameraHead(dim_in=2 * embed_dim)
+        # self.camera_head = None
+        self.dynamic_head = None
+        self.ego_pose_head = None
+        
         # self.point_head = DPTHead(dim_in=2 * embed_dim, output_dim=4, activation="inv_log", conf_activation="expp1")# ,down_ratio=2)
         #self.depth_head = DPTHead(dim_in=2 * embed_dim, output_dim=2, activation="exp", conf_activation="expp1")# ,down_ratio=2)
         # self.depth_head = DPTHead(dim_in=2 * embed_dim, output_dim=2, activation="exp", conf_activation="sigmoid")
@@ -32,7 +36,12 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         
         #GS attributes
         # self.gs_head = GaussianHead(dim_in= 3 * embed_dim, output_dim=3 + 1 + 3 + 4 + 1 , activation="sigmoid")# ,down_ratio=2)#RGB
-        self.dynamic_head = DPTHead(dim_in= embed_dim, output_dim = 1 + 1, activation="linear") # ,down_ratio=2)#RGB
+        if useDynamicHead:
+            self.dynamic_head = DPTHead(dim_in= embed_dim, output_dim = 1 + 1, activation="linear") # ,down_ratio=2)#RGB
+        if useEgoPosePredHead:
+            self.ego_pose_head = EgoPosePredHead(dim_in= 2*embed_dim)
+        if useCameraHead:
+            self.ego_pose_head = CameraHead(dim_in=2 * embed_dim)
         # self.semantic_head = DPTHead(dim_in= embed_dim, output_dim = semantic_num + 1, activation="linear")# ,down_ratio=2)#RGB
         # Color, opacity, scale, rotation
         # self.sky_model = SkyGaussian()
@@ -61,9 +70,14 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
         with torch.cuda.amp.autocast(enabled=False):
             # if self.camera_head is not None:
             #     pose_enc_list = self.camera_head(aggregated_tokens_list)
-            #     predictions["pose_enc"] = pose_enc_list[-1]  # pose encoding of the last iteration
+            #     predictions["absolute_ego_pose_enc"] = pose_enc_list[-1]  # pose encoding of the last iteration
+            #     predictions["absolute_ego_pose_enc_list"] = pose_enc_list
 
- 
+            if self.ego_pose_head is not None:
+                ego_pose_enc_list = self.ego_pose_head(aggregated_tokens_list)
+                predictions["absolute_ego_pose_enc"] = ego_pose_enc_list[-1]  # pose encoding of the last iteration
+                predictions["absolute_ego_pose_enc_list"] = ego_pose_enc_list
+
             # if self.point_head is not None:
             #     pts3d, pts3d_conf = self.point_head(
             #         aggregated_tokens_list, images=images, patch_start_idx=patch_start_idx
