@@ -50,6 +50,13 @@ loss:
   absolute_ego_pose_weight: 1.0
   T_weight: 1.0
   R_weight: 10.0
+  dynamic_balance:
+    enabled: true
+    ema_decay: 0.99
+    warmup_steps: 500
+    update_every_steps: 1
+    r_weight_multiplier_min: 0.5
+    r_weight_multiplier_max: 20.0
   T_loss_type: l1
   R_loss_type: l1
   stage_gamma: 0.6

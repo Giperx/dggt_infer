@@ -144,6 +144,72 @@ def _get_autocast_dtype(dtype_name: str):
     return torch.float16
 
 
+class EMALossWeightBalancer:
+    def __init__(
+        self,
+        enabled: bool,
+        base_t_weight: float,
+        base_r_weight: float,
+        ema_decay: float = 0.99,
+        warmup_steps: int = 0,
+        update_every_steps: int = 1,
+        r_weight_multiplier_min: float = 0.25,
+        r_weight_multiplier_max: float = 20.0,
+        eps: float = 1e-8,
+    ):
+        self.enabled = bool(enabled)
+        self.base_t_weight = float(base_t_weight)
+        self.base_r_weight = float(base_r_weight)
+        self.ema_decay = float(ema_decay)
+        self.warmup_steps = int(warmup_steps)
+        self.update_every_steps = int(update_every_steps)
+        self.r_weight_multiplier_min = float(r_weight_multiplier_min)
+        self.r_weight_multiplier_max = float(r_weight_multiplier_max)
+        self.eps = float(eps)
+
+        self.ema_loss_t = None
+        self.ema_loss_r = None
+        self.current_t_weight = self.base_t_weight
+        self.current_r_weight = self.base_r_weight
+
+    def _global_mean(self, loss_value: torch.Tensor):
+        reduced = loss_value.detach().clone()
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(reduced, op=dist.ReduceOp.SUM)
+            reduced = reduced / max(dist.get_world_size(), 1)
+        return float(reduced.item())
+
+    def get_current_weights(self):
+        return float(self.current_t_weight), float(self.current_r_weight)
+
+    def maybe_update_from_losses(self, loss_t: torch.Tensor, loss_r: torch.Tensor, cur_global_step: int):
+        if not self.enabled:
+            return self.get_current_weights()
+
+        if cur_global_step < self.warmup_steps:
+            return self.get_current_weights()
+
+        if self.update_every_steps <= 0 or (cur_global_step % self.update_every_steps != 0):
+            return self.get_current_weights()
+
+        loss_t_mean = self._global_mean(loss_t)
+        loss_r_mean = self._global_mean(loss_r)
+
+        if self.ema_loss_t is None:
+            self.ema_loss_t = loss_t_mean
+            self.ema_loss_r = loss_r_mean
+        else:
+            self.ema_loss_t = self.ema_decay * self.ema_loss_t + (1.0 - self.ema_decay) * loss_t_mean
+            self.ema_loss_r = self.ema_decay * self.ema_loss_r + (1.0 - self.ema_decay) * loss_r_mean
+
+        r_multiplier = (self.base_t_weight * self.ema_loss_t) / (self.base_r_weight * self.ema_loss_r + self.eps)
+        r_multiplier = max(self.r_weight_multiplier_min, min(self.r_weight_multiplier_max, r_multiplier))
+
+        self.current_t_weight = self.base_t_weight
+        self.current_r_weight = self.base_r_weight * r_multiplier
+        return self.get_current_weights()
+
+
 # def resolve_model_module_name(cfg_name: str) -> str:
 #     # Config keeps the user-facing name "dynamic_head", model module is instance_head.
 #     if cfg_name == 'dynamic_head':
@@ -267,7 +333,7 @@ def compute_ego_pose_loss(
     }
 
 
-def compute_absolute_ego_pose_loss(predictions, gt_ego_pose, cfg):
+def compute_absolute_ego_pose_loss(predictions, gt_ego_pose, cfg, t_weight=None, r_weight=None):
     pred_pose_stages = [pose_enc[:, 1:] for pose_enc in predictions['absolute_ego_pose_enc_list']]
     gt_pose = gt_ego_pose[:, 1:]
 
@@ -281,9 +347,14 @@ def compute_absolute_ego_pose_loss(predictions, gt_ego_pose, cfg):
         pose_encoding_type=str(cfg.loss.get('pose_encoding_type', 'absT_quaR')),
     )
 
+    if t_weight is None:
+        t_weight = float(cfg.loss.get('T_weight', 1.0))
+    if r_weight is None:
+        r_weight = float(cfg.loss.get('R_weight', 1.0))
+
     total_loss = float(cfg.loss.get('absolute_ego_pose_weight', 1.0)) * (
-        float(cfg.loss.get('T_weight', 1.0)) * loss_dict['loss_absolute_ego_pose_T']
-        + float(cfg.loss.get('R_weight', 1.0)) * loss_dict['loss_absolute_ego_pose_R']
+        float(t_weight) * loss_dict['loss_absolute_ego_pose_T']
+        + float(r_weight) * loss_dict['loss_absolute_ego_pose_R']
     )
     return loss_dict, total_loss
 
@@ -356,9 +427,10 @@ def main(args):
         OmegaConf.save(cfg, os.path.join(log_dir, 'config_resolved.yaml'))
         log_file = open(log_txt_path, 'a', encoding='utf-8')
 
-    def log_fn(msg: str):
+    def log_fn(msg: str, print_flag: bool = True):
         if local_rank == 0:
-            print(msg)
+            if print_flag:
+                print(msg)
             if log_file is not None:
                 log_file.write(msg + '\n')
                 log_file.flush()
@@ -425,13 +497,22 @@ def main(args):
     )
     loss_t_weight = float(cfg.loss.get('T_weight', 1.0))
     loss_r_weight = float(cfg.loss.get('R_weight', 1.0))
+    dynamic_balance_cfg = cfg.loss.get('dynamic_balance', {})
+    dynamic_balance_enabled = bool(dynamic_balance_cfg.get('enabled', False))
+    dynamic_balance_ema_decay = float(dynamic_balance_cfg.get('ema_decay', 0.99))
+    dynamic_balance_warmup_steps = int(dynamic_balance_cfg.get('warmup_steps', 0))
+    dynamic_balance_update_every_steps = int(dynamic_balance_cfg.get('update_every_steps', 1))
+    dynamic_balance_r_weight_multiplier_min = float(dynamic_balance_cfg.get('r_weight_multiplier_min', 0.25))
+    dynamic_balance_r_weight_multiplier_max = float(dynamic_balance_cfg.get('r_weight_multiplier_max', 20.0))
     cal_flag = bool(cfg.log.get('cal_flag', False))
     debug_cal_every_steps = int(cfg.log.get('debug_cal_every_steps', 0))
     if local_rank == 0:
         log_fn(
             f"train_log_every_steps={train_log_every_steps}, val_every_steps={val_every_steps}, save_ckpt_every_steps={save_ckpt_every_steps}, "
             f"cal_flag={cal_flag}, debug_cal_every_steps={debug_cal_every_steps}, "
-            f"loss_weights(T={loss_t_weight}, R={loss_r_weight})"
+            f"loss_weights(T={loss_t_weight}, R={loss_r_weight}), "
+            f"dynamic_balance(enabled={dynamic_balance_enabled}, ema_decay={dynamic_balance_ema_decay}, warmup_steps={dynamic_balance_warmup_steps}, "
+            f"update_every_steps={dynamic_balance_update_every_steps}, r_mult=[{dynamic_balance_r_weight_multiplier_min}, {dynamic_balance_r_weight_multiplier_max}])"
         )
 
     model = VGGT(useDynamicHead=False, useCameraHead=cfg.model_init.use_camera_head_for_ego_pose).to(device)
@@ -460,12 +541,32 @@ def main(args):
 
     amp_enabled = bool(cfg.train.use_amp)
     amp_dtype = _get_autocast_dtype(cfg.train.amp_dtype)
+    abs_loss_weight = float(cfg.loss.get('absolute_ego_pose_weight', 1.0))
+    loss_balancer = EMALossWeightBalancer(
+        enabled=dynamic_balance_enabled,
+        base_t_weight=loss_t_weight,
+        base_r_weight=loss_r_weight,
+        ema_decay=dynamic_balance_ema_decay,
+        warmup_steps=dynamic_balance_warmup_steps,
+        update_every_steps=dynamic_balance_update_every_steps,
+        r_weight_multiplier_min=dynamic_balance_r_weight_multiplier_min,
+        r_weight_multiplier_max=dynamic_balance_r_weight_multiplier_max,
+    )
 
     global_step = 0
     last_ckpt_global_step = -1
     pbar = tqdm(total=progress_total_steps, dynamic_ncols=True, desc='train_steps') if local_rank == 0 else None
 
-    def _reduce_and_log_train_metrics(cur_global_step: int, cur_epoch_idx: int, train_loss_sum, train_loss_T_sum, train_loss_R_sum, train_count):
+    def _reduce_and_log_train_metrics(
+        cur_global_step: int,
+        cur_epoch_idx: int,
+        train_loss_sum,
+        train_loss_T_sum,
+        train_loss_R_sum,
+        train_count,
+        cur_t_weight: float,
+        cur_r_weight: float,
+    ):
         dist.all_reduce(train_loss_sum, op=dist.ReduceOp.SUM)
         dist.all_reduce(train_loss_T_sum, op=dist.ReduceOp.SUM)
         dist.all_reduce(train_loss_R_sum, op=dist.ReduceOp.SUM)
@@ -479,12 +580,16 @@ def main(args):
             lr_now = float(scheduler.get_last_lr()[0])
             log_fn(
                 f"[epoch={cur_epoch_idx}/{max_epoch}] [step={cur_global_step}/{max_steps}] "
-                f"Train Loss: {avg_train_loss:.4f} (T={avg_train_loss_T:.4f}, R={avg_train_loss_R:.4f}) | LR: {lr_now:.6e}"
+                f"Train Loss: {avg_train_loss:.4f} (T={avg_train_loss_T:.4f}, R={avg_train_loss_R:.4f}) | "
+                f"wT={cur_t_weight:.4f}, wR={cur_r_weight:.4f} | LR: {lr_now:.6e}",
+                print_flag=False
             )
             if writer is not None:
                 writer.add_scalar('loss/train', avg_train_loss, cur_global_step)
                 writer.add_scalar('loss/train_T', avg_train_loss_T, cur_global_step)
                 writer.add_scalar('loss/train_R', avg_train_loss_R, cur_global_step)
+                writer.add_scalar('loss_weight/train_T', cur_t_weight, cur_global_step)
+                writer.add_scalar('loss_weight/train_R', cur_r_weight, cur_global_step)
                 writer.add_scalar('lr', lr_now, cur_global_step)
 
     def _zero_train_stats(train_loss_sum, train_loss_T_sum, train_loss_R_sum, train_count):
@@ -565,6 +670,7 @@ def main(args):
 
     for epoch_idx in range(max_epoch):
         sampler.set_epoch(epoch_idx)
+        cur_train_t_weight, cur_train_r_weight = loss_balancer.get_current_weights()
 
         train_loss_sum_local = torch.zeros(1, device=device)
         train_loss_T_sum_local = torch.zeros(1, device=device)
@@ -583,7 +689,16 @@ def main(args):
 
             with torch.cuda.amp.autocast(enabled=amp_enabled, dtype=amp_dtype):
                 predictions = model(images)
-                loss_dict, loss = compute_absolute_ego_pose_loss(predictions, gt_ego_pose, cfg)
+                loss_dict, _ = compute_absolute_ego_pose_loss(predictions, gt_ego_pose, cfg)
+                cur_train_t_weight, cur_train_r_weight = loss_balancer.maybe_update_from_losses(
+                    loss_dict['loss_absolute_ego_pose_T'],
+                    loss_dict['loss_absolute_ego_pose_R'],
+                    global_step + 1,
+                )
+                loss = abs_loss_weight * (
+                    cur_train_t_weight * loss_dict['loss_absolute_ego_pose_T']
+                    + cur_train_r_weight * loss_dict['loss_absolute_ego_pose_R']
+                )
 
             loss.backward()
             optimizer.step()
@@ -611,6 +726,8 @@ def main(args):
                     train_interval_loss_T_sum_local,
                     train_interval_loss_R_sum_local,
                     train_interval_count_local,
+                    cur_train_t_weight,
+                    cur_train_r_weight,
                 )
                 _zero_train_stats(
                     train_interval_loss_sum_local,
@@ -643,6 +760,8 @@ def main(args):
                 train_interval_loss_T_sum_local,
                 train_interval_loss_R_sum_local,
                 train_interval_count_local,
+                cur_train_t_weight,
+                cur_train_r_weight,
             )
             _zero_train_stats(
                 train_interval_loss_sum_local,
@@ -663,7 +782,8 @@ def main(args):
             lr_now = float(scheduler.get_last_lr()[0])
             log_fn(
                 f"[epoch={epoch_idx}/{max_epoch}] [step={global_step}/{max_steps}] "
-                f"Train Loss: {avg_train_loss:.4f} (T={avg_train_loss_T:.4f}, R={avg_train_loss_R:.4f}) | LR: {lr_now:.6e}"
+                f"Train Loss: {avg_train_loss:.4f} (T={avg_train_loss_T:.4f}, R={avg_train_loss_R:.4f}) | "
+                f"wT={cur_train_t_weight:.4f}, wR={cur_train_r_weight:.4f} | LR: {lr_now:.6e}"
             )
 
     if local_rank == 0:
