@@ -48,6 +48,8 @@ train:
 
 loss:
   absolute_ego_pose_weight: 1.0
+  T_weight: 1.0
+  R_weight: 10.0
   T_loss_type: l1
   R_loss_type: l1
   stage_gamma: 0.6

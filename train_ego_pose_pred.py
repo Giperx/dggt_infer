@@ -281,9 +281,9 @@ def compute_absolute_ego_pose_loss(predictions, gt_ego_pose, cfg):
         pose_encoding_type=str(cfg.loss.get('pose_encoding_type', 'absT_quaR')),
     )
 
-    total_loss = (
-        float(cfg.loss.get('absolute_ego_pose_weight', 1.0))
-        * (loss_dict['loss_absolute_ego_pose_T'] + loss_dict['loss_absolute_ego_pose_R'])
+    total_loss = float(cfg.loss.get('absolute_ego_pose_weight', 1.0)) * (
+        float(cfg.loss.get('T_weight', 1.0)) * loss_dict['loss_absolute_ego_pose_T']
+        + float(cfg.loss.get('R_weight', 1.0)) * loss_dict['loss_absolute_ego_pose_R']
     )
     return loss_dict, total_loss
 
@@ -423,12 +423,15 @@ def main(args):
     save_ckpt_every_steps = int(
         cfg.train.get('save_ckpt_every_steps', int(cfg.train.save_ckpt_every) * max(steps_per_epoch, 1))
     )
+    loss_t_weight = float(cfg.loss.get('T_weight', 1.0))
+    loss_r_weight = float(cfg.loss.get('R_weight', 1.0))
     cal_flag = bool(cfg.log.get('cal_flag', False))
     debug_cal_every_steps = int(cfg.log.get('debug_cal_every_steps', 0))
     if local_rank == 0:
         log_fn(
             f"train_log_every_steps={train_log_every_steps}, val_every_steps={val_every_steps}, save_ckpt_every_steps={save_ckpt_every_steps}, "
-            f"cal_flag={cal_flag}, debug_cal_every_steps={debug_cal_every_steps}"
+            f"cal_flag={cal_flag}, debug_cal_every_steps={debug_cal_every_steps}, "
+            f"loss_weights(T={loss_t_weight}, R={loss_r_weight})"
         )
 
     model = VGGT(useDynamicHead=False, useCameraHead=cfg.model_init.use_camera_head_for_ego_pose).to(device)
