@@ -15,7 +15,43 @@ from dggt.models.vggt import VGGT
 from datasets.nuscenes.nuscenes_temporal_dataset import NuScenesTemporalMultiCamDataset
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
+def print_depth_distribution(depth_tensor: torch.Tensor, label: str, num_bins: int = 10) -> None:
+    """Print compact statistics and a histogram for a depth tensor."""
+    flat = depth_tensor.detach().float().reshape(-1)
+    flat = flat[torch.isfinite(flat)]
 
+    if flat.numel() == 0:
+        print(f"{label}: no finite depth values")
+        return
+
+    min_v = flat.min().item()
+    max_v = flat.max().item()
+    mean_v = flat.mean().item()
+    std_v = flat.std(unbiased=False).item()
+    percentiles = torch.quantile(
+        flat,
+        torch.tensor([0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99], device=flat.device),
+    ).tolist()
+
+    print(f"\n[{label}]")
+    print(f"count={flat.numel()}, min={min_v:.6f}, max={max_v:.6f}, mean={mean_v:.6f}, std={std_v:.6f}")
+    print(
+        "percentiles="
+        f"p01={percentiles[0]:.6f}, p05={percentiles[1]:.6f}, p25={percentiles[2]:.6f}, "
+        f"p50={percentiles[3]:.6f}, p75={percentiles[4]:.6f}, p95={percentiles[5]:.6f}, p99={percentiles[6]:.6f}"
+    )
+
+    if max_v > min_v:
+        hist = torch.histc(flat, bins=num_bins, min=min_v, max=max_v)
+        bin_edges = torch.linspace(min_v, max_v, num_bins + 1)
+        print("histogram:")
+        for idx in range(num_bins):
+            left = bin_edges[idx].item()
+            right = bin_edges[idx + 1].item()
+            count = int(hist[idx].item())
+            print(f"  [{left:.6f}, {right:.6f}): {count}")
+    else:
+        print("histogram: all values are identical")
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -38,6 +74,8 @@ def strip_prefix_from_state_dict(state_dict, prefix: str):
     for k, v in state_dict.items():
         if k.startswith(prefix):
             new_state_dict[k[len(prefix):]] = v
+        elif k.startswith('.'):
+            new_state_dict[k[1:]] = v
         else:
             new_state_dict[k] = v
     return new_state_dict
@@ -63,6 +101,9 @@ def load_init_weights(model: VGGT, cfg, local_rank: int, log_fn):
 
     agg_state = load_ckpt_state_dict(init_cfg.aggregator_ckpt)
     dyn_state = load_ckpt_state_dict(init_cfg.dynamic_head_ckpt)
+
+    if model.dynamic_head is None:
+        raise ValueError('model.dynamic_head is None. Please construct VGGT with useDynamicHead=True for dynamic training.')
 
     agg_state = strip_prefix_from_state_dict(agg_state, init_cfg.aggregator_prefix)
     dyn_state = strip_prefix_from_state_dict(dyn_state, init_cfg.dynamic_head_prefix)
@@ -177,6 +218,8 @@ def main(args):
         target_size=int(cfg.data.target_size),
         is_val=False,
         multiframe_forward_order=bool(cfg.data.get('multiframe_forward_order', False)),
+        enable_horizontal_flip=bool(cfg.data.get('enable_horizontal_flip', True)),
+        horizontal_flip_prob=float(cfg.data.get('horizontal_flip_prob', 0.5)),
     )
     sampler = DistributedSampler(dataset, shuffle=True)
     dataloader = DataLoader(
@@ -196,6 +239,8 @@ def main(args):
         target_size=int(cfg.data.target_size),
         is_val=True,
         multiframe_forward_order=bool(cfg.data.get('multiframe_forward_order', False)),
+        enable_horizontal_flip=False,
+        horizontal_flip_prob=0.0,
     )
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
     val_dataloader = DataLoader(
@@ -233,7 +278,7 @@ def main(args):
     if local_rank == 0:
         log_fn(f"val_every_steps={val_every_steps}, save_ckpt_every_steps={save_ckpt_every_steps}, debug_vis_every_steps={debug_vis_every_steps}, vis_flag={vis_flag}")
 
-    model = VGGT().to(device)
+    model = VGGT(useDynamicHead=True, useCameraHead=False).to(device)
     load_init_weights(model, cfg, local_rank, log_fn)
 
     model.train()
@@ -282,7 +327,8 @@ def main(args):
 
                 val_predictions = model(val_images)
                 val_dy_map = val_predictions['dynamic_conf'].squeeze(-1)
-
+                # 输出mask范围
+                # print_depth_distribution(val_dy_map, label="Validation Dynamic Confidence Map Distribution")
                 if val_dynamic_masks is not None:
                     val_dynamic_loss = binary_loss_fn(val_dy_map[0], val_dynamic_masks[0].float())
                 else:

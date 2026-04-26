@@ -52,7 +52,7 @@ log:
   # Legacy key (fallback):
   debug_vis_every: 10 # not used
   # Preferred global-step key:
-  vis_flag: true
+  vis_flag: false
   debug_vis_every_steps: 5000
 
 # CUDA_VISIBLE_DEVICES=4 torchrun --standalone --nnodes=1 --nproc_per_node=1 train_dynamic.py --config configs/train_dynamic_nuscenes.yaml

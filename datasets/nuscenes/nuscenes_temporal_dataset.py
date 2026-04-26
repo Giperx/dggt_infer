@@ -25,6 +25,33 @@ CAMERA_GROUPS = {
 # 5: CAM_BACK
 
 
+def reflect_extrinsics(extrinsics: torch.Tensor) -> torch.Tensor:
+    """
+    Reflect extrinsics along the x axis.
+
+    Supports both:
+      - (..., 4, 4) homogeneous transforms
+      - (..., 3, 4) [R|t] transforms
+
+    Returns the same shape as input.
+    """
+    if extrinsics.shape[-2:] not in ((4, 4), (3, 4)):
+        raise ValueError(f"Expected extrinsics shape (...,4,4) or (...,3,4), got {tuple(extrinsics.shape)}")
+
+    reflect = torch.eye(4, dtype=extrinsics.dtype, device=extrinsics.device)
+    reflect[0, 0] = -1
+
+    if extrinsics.shape[-2:] == (4, 4):
+        return reflect @ extrinsics @ reflect
+
+    bottom = torch.tensor([0, 0, 0, 1], dtype=extrinsics.dtype, device=extrinsics.device)
+    bottom = bottom.view(*([1] * (extrinsics.ndim - 2)), 1, 4).expand(*extrinsics.shape[:-2], 1, 4)
+
+    extr4 = torch.cat([extrinsics, bottom], dim=-2)
+    extr4_ref = reflect @ extr4 @ reflect
+    return extr4_ref[..., :3, :]
+
+
 def _load_scene_list(scene_list_file: str) -> List[str]:
     with open(scene_list_file, "r") as f:
         return [line.strip() for line in f if line.strip()]
@@ -143,6 +170,8 @@ class NuScenesTemporalMultiCamDataset(Dataset):
         max_interval: int = 5,
         is_val: bool = False,
         multiframe_forward_order: bool = False,
+        enable_horizontal_flip: bool = False,
+        horizontal_flip_prob: float = 0.5,
     ):
         if sequence_length != 3:
             raise ValueError("This dataset is designed for exactly 3 frames per sample.")
@@ -157,6 +186,8 @@ class NuScenesTemporalMultiCamDataset(Dataset):
         self.num_cameras_per_frame = num_cameras_per_frame
         self.is_val = is_val
         self.multiframe_forward_order = multiframe_forward_order
+        self.enable_horizontal_flip = bool(enable_horizontal_flip)
+        self.horizontal_flip_prob = float(horizontal_flip_prob)
 
         self.scene_entries = []
         self.train_sequence_index = []
@@ -345,6 +376,17 @@ class NuScenesTemporalMultiCamDataset(Dataset):
 
         images = _load_images(image_paths, target_size=self.target_size, is_mask=False)
         dynamic_mask = _load_images(mask_paths, target_size=self.target_size, is_mask=True)
+        ego_n_to_ego_first = torch.tensor(np.stack(frame_ego_to_ego0), dtype=torch.float32)
+
+        do_horizontal_flip = (
+            (not self.is_val)
+            and self.enable_horizontal_flip
+            and (random.random() < self.horizontal_flip_prob)
+        )
+        if do_horizontal_flip:
+            images = torch.flip(images, dims=[-1])
+            dynamic_mask = torch.flip(dynamic_mask, dims=[-1])
+            ego_n_to_ego_first = reflect_extrinsics(ego_n_to_ego_first)
 
         return {
             "images": images,
@@ -356,7 +398,7 @@ class NuScenesTemporalMultiCamDataset(Dataset):
             "view_frame_ids": torch.tensor(view_frame_ids, dtype=torch.long),
             "view_camera_ids": torch.tensor(view_camera_ids, dtype=torch.long),
             "timestamps": torch.tensor(timestamps, dtype=torch.float32),
-            "ego_n_to_ego_first": torch.tensor(np.stack(frame_ego_to_ego0), dtype=torch.float32),
+            "ego_n_to_ego_first": ego_n_to_ego_first,
             # "ego_to_ego0": torch.tensor(np.stack(view_ego_to_ego0), dtype=torch.float32),
             "interval": interval,
             # "image_paths": image_paths,

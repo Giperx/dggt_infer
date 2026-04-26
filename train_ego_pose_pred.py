@@ -444,6 +444,8 @@ def main(args):
         target_size=int(cfg.data.target_size),
         is_val=False,
         multiframe_forward_order=bool(cfg.data.get('multiframe_forward_order', False)),
+        enable_horizontal_flip=bool(cfg.data.get('enable_horizontal_flip', True)),
+        horizontal_flip_prob=float(cfg.data.get('horizontal_flip_prob', 0.5)),
     )
     sampler = DistributedSampler(dataset, shuffle=True)
     dataloader = DataLoader(
@@ -463,6 +465,8 @@ def main(args):
         target_size=int(cfg.data.target_size),
         is_val=True,
         multiframe_forward_order=bool(cfg.data.get('multiframe_forward_order', False)),
+        enable_horizontal_flip=False,
+        horizontal_flip_prob=0.0,
     )
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
     val_dataloader = DataLoader(
@@ -661,7 +665,7 @@ def main(args):
                     writer.add_scalar('metric/val_trans_error', val_pose_metric_result['trans_mean'], cur_global_step)
                     for threshold, auc_value in val_pose_metric_result['aucs'].items():
                         writer.add_scalar(f'metric/val_auc_{threshold}', auc_value, cur_global_step)
-
+        
         model.train()
 
     run_val_at_start = bool(cfg.train.get('val_at_start', True))

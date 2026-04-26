@@ -74,7 +74,7 @@ class VGGT(nn.Module, PyTorchModelHubMixin):
                 ego_pose_enc_list = self.ego_pose_head(aggregated_tokens_list)
                 predictions["absolute_ego_pose_enc"] = ego_pose_enc_list[-1]  # pose encoding of the last iteration
                 predictions["absolute_ego_pose_enc_list"] = ego_pose_enc_list
-
+                
             # if self.point_head is not None:
             #     pts3d, pts3d_conf = self.point_head(
             #         aggregated_tokens_list, images=images, patch_start_idx=patch_start_idx
