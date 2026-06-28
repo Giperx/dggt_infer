@@ -584,9 +584,7 @@ def main(args):
             lr_now = float(scheduler.get_last_lr()[0])
             log_fn(
                 f"[epoch={cur_epoch_idx}/{max_epoch}] [step={cur_global_step}/{max_steps}] "
-                f"Train Loss: {avg_train_loss:.4f} (T={avg_train_loss_T:.4f}, R={avg_train_loss_R:.4f}) | "
-                f"wT={cur_t_weight:.4f}, wR={cur_r_weight:.4f} | LR: {lr_now:.6e}",
-                print_flag=False
+                f"Train Loss: {avg_train_loss:.4f} (T={avg_train_loss_T:.4f}, R={avg_train_loss_R:.4f}) | LR: {lr_now:.6e}"
             )
             if writer is not None:
                 writer.add_scalar('loss/train', avg_train_loss, cur_global_step)

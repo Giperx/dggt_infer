@@ -1,7 +1,7 @@
 data:
-  image_dir: data/datasets/nuscenes/processed_10Hz/trainval2
-  train_scene_list: data/datasets/nuscenes/processed_10Hz/trainval2/nuScenes_Train.txt
-  val_scene_list: data/datasets/nuscenes/processed_10Hz/trainval2/nuScenes_Val.txt
+  image_dir: data/datasets
+  train_scene_list: data/datasets/nuScenes_Train.txt
+  val_scene_list: data/datasets/nuScenes_Val.txt
   # true: old->new (0,1,2), false: new->old (2,1,0)
   multiframe_forward_order: true
   sequence_length: 3
