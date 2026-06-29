@@ -248,15 +248,15 @@ class SkyGaussian(nn.Module):
         for start in range(0, S_, chunk_size):
             end = min(start + chunk_size, S_)
             bg_render, _, _  = rasterization(
-                        means=self.bg_pcd[proj_mask],       
-                        quats=self.bg_quat[proj_mask],           
-                        scales=torch.exp(self.bg_scales)[proj_mask] + background_scale_res,           
-                        opacities=self.bg_opacity.squeeze(-1)[proj_mask],        
-                        colors=background_feat,              
+                        means=self.bg_pcd[proj_mask],
+                        quats=self.bg_quat[proj_mask],
+                        scales=torch.exp(self.bg_scales)[proj_mask] + background_scale_res,
+                        opacities=self.bg_opacity.squeeze(-1)[proj_mask],
+                        colors=background_feat,
                         viewmats=extrinsics_[start:end,...],     # (chunk, 4, 4)
                         Ks=intrinsics_[start:end,...],        # (chunk, 3, 3)
                         width=W,
-                        height=H
+                        height=H,
                     )
             # #
             points = self.bg_pcd[proj_mask]
@@ -278,10 +278,12 @@ class SkyGaussian(nn.Module):
         return bg_render
 
 
-    def forward(self, images, extrinsics, intrinsics,downsample=1):
+    def forward(self, images, extrinsics, intrinsics, downsample=1, render_width=None, render_height=None, sample_intrinsics=None):
         S = extrinsics.shape[0]
-        intrinsics_4x4 = torch.eye(4).unsqueeze(0).repeat(S, 1, 1).to(device=intrinsics.device)
-        intrinsics_4x4[:,:3, :3] = intrinsics
+        # Use sample_intrinsics for color sampling (if provided), otherwise use intrinsics
+        sample_int = sample_intrinsics if sample_intrinsics is not None else intrinsics
+        intrinsics_4x4 = torch.eye(4).unsqueeze(0).repeat(S, 1, 1).to(device=sample_int.device)
+        intrinsics_4x4[:,:3, :3] = sample_int
 
         background_feat,proj_mask, background_scale_res = self._get_background_color(
                                                                                     source_images=images,
@@ -290,22 +292,24 @@ class SkyGaussian(nn.Module):
                                                                                     downsample = downsample
                                                                                     )
 
-        H, W = images.shape[-2:]
+        H = render_height if render_height is not None else images.shape[-2]
+        W = render_width if render_width is not None else images.shape[-1]
 
-        chunk_size = 4 
+        chunk_size = 4
         chunked_renders = []
         for start in range(0, S, chunk_size):
             end = min(start + chunk_size, S)
             bg_render, _, _  = rasterization(
-                        means=self.bg_pcd[proj_mask],       
-                        quats=self.bg_quat[proj_mask],           
-                        scales=torch.exp(self.bg_scales)[proj_mask] + background_scale_res,           
-                        opacities=self.bg_opacity.squeeze(-1)[proj_mask],        
-                        colors=background_feat,              
+                        means=self.bg_pcd[proj_mask],
+                        quats=self.bg_quat[proj_mask],
+                        scales=torch.exp(self.bg_scales)[proj_mask] + background_scale_res,
+                        opacities=self.bg_opacity.squeeze(-1)[proj_mask],
+                        colors=background_feat,
                         viewmats=extrinsics[start:end,...],     # (chunk, 4, 4)
                         Ks=intrinsics[start:end,...],        # (chunk, 3, 3)
                         width=W,
-                        height=H
+                        height=H,
+                        backgrounds=None,
                     )
             # #
             points = self.bg_pcd[proj_mask]

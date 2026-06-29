@@ -4,14 +4,15 @@ from PIL import Image
 import torchvision.transforms as transforms
 from third_party.difix.src.model import Difix
 
-def process_images_with_difix(img_tensor, model_path):
+def process_images_with_difix(img_tensor, model_path, model=None):
 
-    model = Difix(
-        pretrained_path=model_path,
-        timestep=199,
-        mv_unet=False
-    )
-    model.set_eval()
+    if model is None:
+        model = Difix(
+            pretrained_path=model_path,
+            timestep=199,
+            mv_unet=False
+        )
+        model.set_eval()
 
     _, orig_h, orig_w = img_tensor.shape
     

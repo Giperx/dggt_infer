@@ -15,9 +15,9 @@ from einops import rearrange, repeat
 
 
 def make_1step_sched():
-    # local_sd_turbo = "/sd_turbo"  # local_if needed
-    # noise_scheduler_1step = DDPMScheduler.from_pretrained(local_sd_turbo, subfolder="scheduler")
-    noise_scheduler_1step = DDPMScheduler.from_pretrained("stabilityai/sd-turbo", subfolder="scheduler")
+    local_sd_turbo = "pretrained/sd-turbo"  # local_if needed
+    noise_scheduler_1step = DDPMScheduler.from_pretrained(local_sd_turbo, subfolder="scheduler")
+    # noise_scheduler_1step = DDPMScheduler.from_pretrained("stabilityai/sd-turbo", subfolder="scheduler")
     noise_scheduler_1step.set_timesteps(1, device="cuda")
     noise_scheduler_1step.alphas_cumprod = noise_scheduler_1step.alphas_cumprod.cuda()
     return noise_scheduler_1step
@@ -118,16 +118,16 @@ def save_ckpt(net_difix, optimizer, outf):
 class Difix(torch.nn.Module):
     def __init__(self, pretrained_name=None, pretrained_path=None, ckpt_folder="checkpoints", lora_rank_vae=4, mv_unet=False, timestep=999):
         super().__init__()
-        # local_sd_turbo = "/sd_turbo"
-        # self.tokenizer = AutoTokenizer.from_pretrained(local_sd_turbo, subfolder="tokenizer")
-        # self.text_encoder = CLIPTextModel.from_pretrained(local_sd_turbo, subfolder="text_encoder").cuda()
+        local_sd_turbo = "pretrained/sd-turbo"
+        self.tokenizer = AutoTokenizer.from_pretrained(local_sd_turbo, subfolder="tokenizer")
+        self.text_encoder = CLIPTextModel.from_pretrained(local_sd_turbo, subfolder="text_encoder").cuda()
         
-        self.tokenizer = AutoTokenizer.from_pretrained("stabilityai/sd-turbo", subfolder="tokenizer")
-        self.text_encoder = CLIPTextModel.from_pretrained("stabilityai/sd-turbo", subfolder="text_encoder").cuda()
+        # self.tokenizer = AutoTokenizer.from_pretrained("stabilityai/sd-turbo", subfolder="tokenizer")
+        # self.text_encoder = CLIPTextModel.from_pretrained("stabilityai/sd-turbo", subfolder="text_encoder").cuda()
         self.sched = make_1step_sched()
 
-        vae = AutoencoderKL.from_pretrained("stabilityai/sd-turbo", subfolder="vae")
-        # vae = AutoencoderKL.from_pretrained(local_sd_turbo, subfolder="vae")
+        # vae = AutoencoderKL.from_pretrained("stabilityai/sd-turbo", subfolder="vae")
+        vae = AutoencoderKL.from_pretrained(local_sd_turbo, subfolder="vae")
         vae.encoder.forward = my_vae_encoder_fwd.__get__(vae.encoder, vae.encoder.__class__)
         vae.decoder.forward = my_vae_decoder_fwd.__get__(vae.decoder, vae.decoder.__class__)
         # add the skip connection convs
@@ -142,8 +142,8 @@ class Difix(torch.nn.Module):
         else:
             from diffusers import UNet2DConditionModel
 
-        # unet = UNet2DConditionModel.from_pretrained(local_sd_turbo, subfolder="unet")
-        unet = UNet2DConditionModel.from_pretrained("stabilityai/sd-turbo", subfolder="unet")
+        unet = UNet2DConditionModel.from_pretrained(local_sd_turbo, subfolder="unet")
+        # unet = UNet2DConditionModel.from_pretrained("stabilityai/sd-turbo", subfolder="unet")
 
         if pretrained_path is not None:
             sd = torch.load(pretrained_path, map_location="cpu")
