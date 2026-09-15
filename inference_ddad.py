@@ -27,12 +27,12 @@ from dggt.utils.gs import concat_list, get_split_gs
 from gsplat.rendering import rasterization
 
 # ── Global config ──
-DATA_DIR = "data/datasets/nuscenes/processed_10Hz/trainval"
-SCENE_LIST = "data/datasets/nuscenes/processed_10Hz_v2/nuScenes_Val.txt"
+DATA_DIR = "data/datasets/ddad_process/valid"
+SCENE_LIST = "data/datasets/ddad_process/valid/valid.txt"
 CKPT_PATH = "pretrained/model_latest_nuscenes.pt" #model_latest_waymo model_latest_nuscenes
-OUTPUT_PATH = "outputs_nuscenes_pt/nuscenes_inference"
+OUTPUT_PATH = "outputs_nuscenes_pt/ddad_inference"
 TARGET_W = 518
-TARGET_H = 294
+TARGET_H = 322
 CAM_IDS = [5, 4, 3]            # Input cameras for model (3 views)
 RENDER_CAM_LIST = [5]          # Only save these cameras
 WIDE_FACTOR = 3                # Render width = original_width * WIDE_FACTOR
@@ -41,6 +41,8 @@ DIFIX_CKPT = "pretrained/model_difix.pkl"  # Set to path to enable Difix3D enhan
 DRY_RUN = False                # True = test data loading only, no model inference
 BACKGROUND_COLOR = [1.0, 1.0, 1.0]  # White background for rendering
 SIMPLE_MERGE = True           # True = merge all Gaussians with predicted opacity (no dyn weighting)
+USE_EGO_CAR_MASK = True       # True = suppress ego car Gaussians via per-camera masks (opacity→min)
+EGO_CAR_OPACITY_LOGIT = -10.0 # Logit value for suppressed Gaussians (sigmoid ≈ 0.00005)
 
 
 def alpha_t(t, t0, alpha, gamma0=1, gamma1=0.1):
@@ -68,6 +70,16 @@ def load_sky_mask(path, target_h, target_w):
     # bg_mask: True where NOT sky
     bg_mask = torch.from_numpy(mask_np == 0)  # [H, W], bool
     return bg_mask
+
+
+def load_ego_car_mask(path, target_h, target_w):
+    """Load ego car mask, resize, return bool tensor [H, W]. True = keep, False = ego car (suppress)."""
+    mask = Image.open(path).convert("L")
+    mask = mask.resize((target_w, target_h), Image.NEAREST)
+    mask_np = np.array(mask)
+    # White (>=128) = keep, Black (<128) = ego car region to suppress
+    keep_mask = torch.from_numpy(mask_np >= 128)  # [H, W], bool
+    return keep_mask
 
 
 def main():
@@ -135,6 +147,7 @@ def main():
             # Load images and sky masks for this frame, all cameras
             images_list = []
             bg_masks_list = []
+            ego_car_masks_list = []  # per-camera ego car masks (True=keep, False=suppress)
             valid = True
             for cam_id in cam_ids:
                 img_path = os.path.join(images_dir, f"{frame_id}_{cam_id}.jpg")
@@ -148,6 +161,17 @@ def main():
                     bg_masks_list.append(load_sky_mask(mask_path, TARGET_H, TARGET_W))
                 else:
                     bg_masks_list.append(torch.ones(TARGET_H, TARGET_W, dtype=torch.bool))
+                # Ego car mask: cam5 keeps all, others use mask file
+                if USE_EGO_CAR_MASK and cam_id != 5:
+                    ego_mask_path = os.path.join(scene_dir, "ego_car_masks", f"{cam_id}.jpg")
+                    if os.path.exists(ego_mask_path):
+                        ego_car_masks_list.append(load_ego_car_mask(ego_mask_path, TARGET_H, TARGET_W))
+                    else:
+                        print(f"  [WARN] Ego car mask not found: {ego_mask_path}, keeping all")
+                        ego_car_masks_list.append(torch.ones(TARGET_H, TARGET_W, dtype=torch.bool))
+                else:
+                    # cam5 or feature disabled: keep all
+                    ego_car_masks_list.append(torch.ones(TARGET_H, TARGET_W, dtype=torch.bool))
 
             if not valid:
                 continue
@@ -155,6 +179,8 @@ def main():
             # Stack: images [1, S, 3, H, W], bg_masks [1, S, H, W]
             images = torch.stack(images_list).unsqueeze(0).to(device)
             bg_masks = torch.stack(bg_masks_list).unsqueeze(0).to(device)
+            if USE_EGO_CAR_MASK:
+                ego_car_masks = torch.stack(ego_car_masks_list).unsqueeze(0).to(device)  # [1, S, H, W], True=keep
             timestamps = torch.zeros(S, device=device)
 
             if DRY_RUN:
@@ -206,6 +232,24 @@ def main():
                     static_gs_conf = gs_conf[static_mask]
                     frame_idx = torch.nonzero(static_mask, as_tuple=False)[:, 1]
                     gs_timestamps = timestamps[frame_idx]
+
+                # ── Ego car mask suppression ──
+                # Suppress Gaussians from ego car regions (cam4, cam3) while keeping count consistent
+                if USE_EGO_CAR_MASK:
+                    nonzero_indices = torch.nonzero(static_mask, as_tuple=False)  # [N, 4]: (batch, cam, h, w)
+                    cam_indices = nonzero_indices[:, 1]  # camera index per Gaussian
+                    h_indices = nonzero_indices[:, 2]
+                    w_indices = nonzero_indices[:, 3]
+                    # cam5 is index 0 (CAM_IDS=[5,4,3]), keep all its Gaussians
+                    # For other cameras (idx 1,2 = cam4,cam3), check ego car mask
+                    cam_not5 = cam_indices != 0  # Gaussians NOT from cam5
+                    if cam_not5.any():
+                        # Look up ego car mask value at each Gaussian's pixel
+                        ego_keep = ego_car_masks[0, cam_indices[cam_not5], h_indices[cam_not5], w_indices[cam_not5]]
+                        # ego_keep=False means ego car region → suppress
+                        suppress = cam_not5.clone()
+                        suppress[cam_not5] = ~ego_keep
+                        static_opacity[suppress] = EGO_CAR_OPACITY_LOGIT
 
                 # Dynamic Gaussians (per view)
                 dynamic_points, dynamic_rgbs, dynamic_opacitys = [], [], []
