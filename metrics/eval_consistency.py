@@ -14,6 +14,7 @@ import argparse
 import os
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -89,7 +90,16 @@ def _write_stats(handle, stats, indent=""):
     )
 
 
-def evaluate_image_dir(render_root, val_list, image_dir=None, progress=None):
+def _score_path(item):
+    scene, frame_id, path = item
+    rgb = np.asarray(Image.open(path).convert("RGB"))
+    row = score_image(rgb)
+    row["scene"] = scene
+    row["frame"] = frame_id
+    return row
+
+
+def evaluate_image_dir(render_root, val_list, image_dir=None, progress=None, workers=1):
     """Score one render tree.
 
     ``image_dir`` None selects the first existing render folder per scene.
@@ -117,16 +127,19 @@ def evaluate_image_dir(render_root, val_list, image_dir=None, progress=None):
         used_dirs.add(selected)
         for frame_id, _suffix, path in frames:
             jobs.append((scene, frame_id, path))
-    rows = []
-    iterator = jobs
-    if progress:
-        iterator = tqdm(jobs, desc=progress, unit="frame")
-    for scene, frame_id, path in iterator:
-        rgb = np.asarray(Image.open(path).convert("RGB"))
-        row = score_image(rgb)
-        row["scene"] = scene
-        row["frame"] = frame_id
-        rows.append(row)
+    if workers > 1 and len(jobs) > 1:
+        with ProcessPoolExecutor(max_workers=workers) as pool:
+            iterator = pool.map(_score_path, jobs, chunksize=16)
+            if progress:
+                iterator = tqdm(iterator, total=len(jobs), desc=progress, unit="frame")
+            rows = list(iterator)
+    else:
+        rows = []
+        iterator = jobs
+        if progress:
+            iterator = tqdm(jobs, desc=progress, unit="frame")
+        for scene, frame_id, path in iterator:
+            rows.append(_score_path((scene, frame_id, path)))
     by_scene = {}
     for row in rows:
         by_scene.setdefault(row["scene"], []).append(row)
@@ -186,7 +199,7 @@ def write_report(path, title, meta_lines, sections):
     return path
 
 
-def run_measurement(groups, image_dirs, out_path, title, meta_lines):
+def run_measurement(groups, image_dirs, out_path, title, meta_lines, workers=1):
     """Score one or more render trees and write one report.
 
     ``groups`` is a list of ``(label, render_root, val_list)``.
@@ -205,7 +218,9 @@ def run_measurement(groups, image_dirs, out_path, title, meta_lines):
         found_root = True
         for image_dir in image_dirs:
             progress = f"{label} {image_dir or 'auto'}"
-            result = evaluate_image_dir(render_root, val_list, image_dir, progress=progress)
+            result = evaluate_image_dir(
+                render_root, val_list, image_dir, progress=progress, workers=workers
+            )
             sections.append((f"{label} / {result['image_dir_label']}", result))
             if result["rows"]:
                 labels_with_rows.add(label)
@@ -252,20 +267,23 @@ def run_measurement(groups, image_dirs, out_path, title, meta_lines):
 
 
 def main():
-    args = parse_args()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = os.path.join(args.render_root, f"consistency_{timestamp}.txt")
-    image_dirs = args.image_dir if args.image_dir else [None]
-    run_measurement(
-        [("WideDrive", args.render_root, args.val_list)],
-        image_dirs,
-        out_path,
-        "DGGT WideDrive CBSR and PD",
-        [
-            f"Render root: {args.render_root}",
-            f"Val list: {args.val_list}",
-        ],
-    )
+    # CBSR and PD scoring is paused. Uncomment the block below to resume.
+    print("CBSR and PD scoring is paused.", flush=True)
+    return
+    # args = parse_args()
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # out_path = os.path.join(args.render_root, f"consistency_{timestamp}.txt")
+    # image_dirs = args.image_dir if args.image_dir else [None]
+    # run_measurement(
+    #     [("WideDrive", args.render_root, args.val_list)],
+    #     image_dirs,
+    #     out_path,
+    #     "DGGT WideDrive CBSR and PD",
+    #     [
+    #         f"Render root: {args.render_root}",
+    #         f"Val list: {args.val_list}",
+    #     ],
+    # )
 
 
 if __name__ == "__main__":

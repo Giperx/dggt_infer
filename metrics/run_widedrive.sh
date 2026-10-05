@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# WideDrive render, then photometric, histogram-matched, CBSR, and PD.
+# WideDrive render, then photometric and histogram-matched metrics.
+# CBSR and PD are paused and are not scored.
 #
 # Inference scripts follow inference_nuscenes*.py: edit the globals at the top
 # of the python file (DATA_DIR, SCENE_LIST, CKPT_PATH, OUTPUT_PATH). This
@@ -12,8 +13,7 @@
 #
 # Scored images are the raw composite when Difix is on (before_rgb), otherwise rgb.
 # GT is the dense camera-2 wide image at 1554x294.
-# CBSR and PD do not use GT. widedrive_CRCS.py and widedrive_IPS.py are kept
-# for comparison and are not called.
+# CBSR and PD are paused. Do not call metrics/eval_consistency.py for now.
 
 set -euo pipefail
 
@@ -60,6 +60,7 @@ python metrics/widedrive_HM.py \
   --render-root "$SAVE_ROOT" \
   --gt-root "$GT_ROOT" \
   --val-list "$VAL_LIST"
-python metrics/eval_consistency.py \
-  --render-root "$SAVE_ROOT" \
-  --val-list "$VAL_LIST"
+# CBSR and PD are paused.
+# python metrics/eval_consistency.py \
+#   --render-root "$SAVE_ROOT" \
+#   --val-list "$VAL_LIST"
