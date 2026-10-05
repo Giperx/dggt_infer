@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WideDrive render, then the same four metrics as the reference run_widedrive.sh.
+# WideDrive render, then photometric, histogram-matched, CBSR, and PD.
 #
 # Inference scripts follow inference_nuscenes*.py: edit the globals at the top
 # of the python file (DATA_DIR, SCENE_LIST, CKPT_PATH, OUTPUT_PATH). This
@@ -12,6 +12,8 @@
 #
 # Scored images are the raw composite when Difix is on (before_rgb), otherwise rgb.
 # GT is the dense camera-2 wide image at 1554x294.
+# CBSR and PD do not use GT. widedrive_CRCS.py and widedrive_IPS.py are kept
+# for comparison and are not called.
 
 set -euo pipefail
 
@@ -58,9 +60,6 @@ python metrics/widedrive_HM.py \
   --render-root "$SAVE_ROOT" \
   --gt-root "$GT_ROOT" \
   --val-list "$VAL_LIST"
-python metrics/widedrive_CRCS.py \
-  --render-root "$SAVE_ROOT" \
-  --val-list "$VAL_LIST"
-python metrics/widedrive_IPS.py \
+python metrics/eval_consistency.py \
   --render-root "$SAVE_ROOT" \
   --val-list "$VAL_LIST"

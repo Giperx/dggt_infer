@@ -1,5 +1,8 @@
 """IPS for WideDrive wide renders.
 
+Kept for comparison. metrics/run_widedrive.sh does not call this.
+The measurement path scores CBSR and PD with metrics/eval_consistency.py.
+
 IPS is the mean horizontal gradient of a masked Gaussian low-pass field,
 reported in 0-255 units on the left and right seam bands. Masked scores use
 only the render mask. No GT is required.

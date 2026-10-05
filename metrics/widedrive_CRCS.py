@@ -1,5 +1,8 @@
 """CRCS for WideDrive wide renders.
 
+Kept for comparison. metrics/run_widedrive.sh does not call this.
+The measurement path scores CBSR and PD with metrics/eval_consistency.py.
+
 CRCS is the mean absolute horizontal color step, in 0-255 units, inside the
 left seam, right seam, and full image. Masked scores use only the render mask.
 No GT is required, and only frames that were actually rendered are scored.
